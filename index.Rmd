@@ -1,0 +1,527 @@
+# Impact of Weather Events on Population Health and Economic Losses
+
+### An Analysis of NOAA's Storm Events Database 
+
+
+## Synopsis 
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. This report provides an analysis as to which weather events effect both aspects across the United States. It was found that "heat" related events have caused the most fatalities, followed by "tornado" and "flood" related events. "Flash flood" had the highest occurrences among the top 5 fatality events. In respect of economic losses, it was found that "flood" events have caused the most property damage, followed by "hurricane/typhoon". "Drought" events, on the other hand, have caused the most crop damage, followed by "flood". However, it was observed that the property damage caused by flood was significantly higher than hurricane/typhoon. Considering the recent events such as Hurricane Sandy and Hurricane Katrina, a further investigation would be necessary to see if any recording errors have occurred.
+
+The NOAA's storm events database collected records from 1950 to 2011. Due to lack of diverse event types, records prior to 1993 were excluded in this analysis. 
+
+
+## Data Source
+
+**Database**
+
+The dataset was obtained from the [course web site][1]. It came in the form of a comma-separated-value file compressed in the bzip2 algorithm.
+
+file name: "repdata-data-StormData.csv.bz2"
+
+
+**Storm Data Event Table**
+
+The standard 48 event types were obtained from [NWS Directive 10-1605][4] page6, section 2.1.1
+
+This [NOAA webpage][3] provided a timeline of how event type records have progressed over the years.
+
+
+**Consumer Price Index**
+
+The data ranged from 1950 to 2011, therefore inflation must be considered. In this analysis, all dollar amounts were adjusted with the U.S. Consumer Price Index(CPI).
+
+CPI was download from [BUREAU of Labor Statistics][5] : 
+
+series ID CUUR0000SA0 (Not Seasonally Adjusted. Area: U.S. city average. Item: All items. Base Period: 1982-84=100). 
+
+The downloaded file was in MS Excel (.xlsx) format and then saved as a comma-separated-value file for R coding. 
+
+Because obtaining CPI data required website "point-and-click" by hand, the detailed process were documented in this [github repository][6]
+
+file name: "cpi_1950_2011.csv", "Getting CPI data from BUREAU of Labor Statistics.pdf"
+
+
+[1]: https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2
+[2]: http://www.noaa.gov/
+[3]: http://www.ncdc.noaa.gov/stormevents/details.jsp?type=eventtype
+[4]: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf
+[5]: http://www.bls.gov/data/
+[6]: https://github.com/blackszu/NOAA_Storm_DataAnalysis/blob/gh-pages/Getting%20CPI%20data%20from%20BUREAU%20of%20Labor%20Statistics.pdf
+
+\
+```{r packages, warning=FALSE, message=FALSE}
+# Check and load required R packages
+pkg<-c("knitr", "ggplot2", "grid", "dplyr", "tidyr")
+pkgCheck<-pkg %in% rownames(installed.packages())
+for(i in 1:length(pkg)) {
+    if(pkgCheck[i]==FALSE) {
+        install.packages(pkg[i])
+    } 
+    library(pkg[i],character.only = TRUE)
+}
+```
+
+```{r setoptions, echo=FALSE, warning=FALSE, include=FALSE}
+opts_chunk$set(fig.width=10,warning=FALSE, message=FALSE)
+```
+
+## Data Processing
+
+### Loading Raw Data
+
+```{r loadData, cache=TRUE}
+con<-bzfile("repdata-data-StormData.csv.bz2", "r")
+storm<- read.csv(con)
+close(con)
+```
+
+```{r rmVar, echo=FALSE}
+rm(i,pkg,pkgCheck)
+```
+
+```{r setCounter}
+#set table and figure counter
+tnum<- 0L
+fnum<- 0L
+```
+
+**Variables**
+
+```{r var1, cache=TRUE}
+colnames(storm)
+```
+
+Among `r ncol(storm)` *variables* in the dataset. We were interested in only the following for the intended analysis:
+
+1. event type: *EVTYPE*
+
+2. population health : *FATALITIES / INJURIES*
+
+3. economic consequences: *PROPDMG / CROPDMG*  for "number", *PROPDMGEXP / CROPDMGEXP*  for "magnitude". The damage dollar amount would be "number" x "magnitude"
+
+4. Others that may be useful for analysis: *STATE / BGN_DATE*
+
+```{r var2, cache=TRUE}
+str(storm[, c(2,7,8,23,24:28)])
+```
+
+```{r var3, cache=TRUE}
+# convert string to Date format
+storm$BGN_DATE<- strptime(storm$BGN_DATE, "%m/%d/%Y %H:%M:%S")
+storm$YEAR<- storm$BGN_DATE$year+1900
+```
+
+
+### Cleaning and Processing Data
+
+**1. Property and Crop Damage**
+
+**1.1 Check data quality**
+
+As stated in [NWS Directive 10-1605][4] page12, section 2.7 Damage: "...Alphabetical characters used to signify magnitude include "K" for thousands, "M" for millions, and "B" for billions..."
+
+However, the dataset had many magnitudes that seemed invalid:
+```{r damage, cache=TRUE}
+levels(storm$PROPDMGEXP) #property damage
+levels(storm$CROPDMGEXP) # crop damage
+```
+
+**1.2 Examine the invalid damage magnitudes**
+
+It was assumed that "H" and "h" signified "hundred" and thus included it as a "valid" magnitudes along with "K", "M", and "B". Below codes examined how many events were marked with invalid damage magnitudes. All letter magnitudes were unified to lower cases. 
+```{r damageMag, cache=TRUE}
+# assume h="hundred". use lower cases
+mag<-c("h", "k", "m", "b")
+
+# (inline codes) check invalid magnitudes with numbers(ie. PROPDMG>0 or CROPDMG>0)
+invalidP<- which(!tolower(storm$PROPDMGEXP) %in% mag & storm$PROPDMG>0)
+invalidPROPDMG<- list(Count=length(invalidP),
+                      Count.Perc=length(invalidP)/nrow(storm[storm$PROPDMG>0,]),
+                      Number.Perc=sum(storm$PROPDMG[invalidP])/sum(storm$PROPDMG),
+                      Count.byYear=with(storm[invalidP, ], table(tolower(PROPDMGEXP), YEAR)))
+
+invalidC<- which(!tolower(storm$CROPDMGEXP) %in% mag & storm$CROPDMG>0)
+invalidCROPDMG<- list(Count=length(invalidC),
+                      Count.Perc=length(invalidC)/nrow(storm[storm$CROPDMG>0,]),
+                      Number.Perc=sum(storm$CROPDMG[invalidC])/sum(storm$CROPDMG),
+                      Count.byYear=with(storm[invalidC, ], table(tolower(CROPDMGEXP), YEAR)))
+```
+
+Number of events with invalid damage magnitude by year, Property and Crop:
+```{r damagePrint, cache=TRUE}
+invalidPROPDMG$Count.byYear
+invalidCROPDMG$Count.byYear
+```
+
+Among all events with a property damage number record (ie. PROPDMG > 0), ~`r sprintf("%0.1f", invalidPROPDMG[[2]]*100)`% (`r invalidPROPDMG[[1]]` events) were marked with an invalid magnitude, and all of them were before year 1995.
+
+Among all the events with a crop damage number record (ie. CROPDMG > 0), ~`r sprintf("%0.1f", invalidCROPDMG[[2]]*100)`% (`r invalidCROPDMG[[1]]` events) were marked with an invalid magnitude, and all of them were before year 1995.
+
+Rather than assuming (guessing) how to correct the invalid damage magnitudes events, we decided to ignore them since they had very minimum impact to the intended analysis.
+
+**1.3 Calculate damage dollar amount**
+
+Calculated property and crop damage dollar amount in **Millions** for each event: 
+
+- if number>0 and magnitude was valid, the dollar amount would be calculated by multiplying the two
+
+- if the number=0, the dollar amount would be 0 as well
+
+- if the magnitude was invalid, the dollar amount would be "NA"
+```{r damageCal, cache=TRUE}
+# set multipliers
+mag10<-10^c(2, 3, 6, 9)
+
+storm$PROPDMG.M<- storm$PROPDMG * mag10[match(tolower(storm$PROPDMGEXP), mag)]/10^6
+storm$CROPDMG.M<- storm$CROPDMG * mag10[match(tolower(storm$CROPDMGEXP), mag)]/10^6
+
+#if damage number=0, its dollar amount should be also 0, not NA
+storm$PROPDMG.M[storm$PROPDMG==0]<- 0
+storm$CROPDMG.M[storm$CROPDMG==0]<- 0
+
+```
+
+**1.4 Adjustment for inflation**
+```{r damageCPI, cache=TRUE}
+# read cpi file, use the "Annual" column
+cpi<- read.csv("cpi_1950_2011.csv", skip=10, colClasses=c(NA,rep("NULL",12),NA,"NULL","NULL"))
+
+# index for converting to present value
+cpi<- transform(cpi, pv=Annual[Year==2011]/Annual)
+
+# calculate adjusted dollar amount
+storm<- transform(storm, adjPROPDMG.M=round(PROPDMG.M * cpi[match(YEAR, cpi$Year),"pv"],0), 
+                  adjCROPDMG.M=round(CROPDMG.M * cpi[match(YEAR, cpi$Year),"pv"],0))
+```
+
+\
+
+**2. Event Type Grouping**
+
+**2.1 Check data quality**
+```{r event, cache=TRUE}
+# EVTYPE factor levels
+nlevels(storm$EVTYPE)
+
+# event types with equal or less than 5 & only 1 record in the database
+list(five.or.less= sum(table(storm$EVTYPE)<6),
+     only.one= sum(table(storm$EVTYPE)==1))
+```
+Among the dataset's `r nlevels(storm$EVTYPE)` event types, many had only 5 or less records, and almost half had only one record. It would be beneficial to the analysis to group them into the standard 48 event types defined in [NWS Directive  10-1605][4]. Below 2.2 to 2.5 sections show how the event-matching was achieved.
+
+**2.2 Get standard event type table**
+
+In keeping with the principle of "Don't do things by hand", we import the event table from the [NWS Directive 10-1605][4] document.
+```{r event48DL, results='hide'}
+url <- "http://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf"
+dest <- tempfile(fileext = ".pdf")
+download.file(url, dest, mode = "wb")
+
+# set path to pdftotxt.exe and convert pdf to text
+exe <- "C:\\Program Files\\Git\\mingw64\\binpdftotext.exe"
+system(paste("\"", exe, "\" \"", dest, "\"", sep = ""), wait = F)
+
+# get txt-file name and rename it  
+filetxt <- sub(".pdf", ".txt", dest)
+fsave<- ".\\NWS Directive 10-1605.txt"
+file.rename(filetxt, fsave)
+evtb<- readLines(fsave)
+```
+
+```{r event48Reorder, cache=TRUE}
+t<-grep("Event Name", evtb)[1] # get the line where the event type table begins
+evtb<-tolower(evtb[c((t+1):(t+24), (t+29):(t+52))])
+evtb[25]<- "hurricane/typhoon"  #change from "hurrican (typhoon)"
+
+#. move the order of the following event types up in the hierachy: "Flood", "Heat", "strong wind", "thunderstorm wind"
+evtb<-evtb[c(15,20,38,39,1:14,16:19,21:37, 40:48)]
+print(evtb)
+```
+
+```{r rmVar2, echo=FALSE}
+rm(t) 
+```
+
+**2.3 Group (match) database events with the standard 48 event types**
+
+By referencing at the variable *EVTYPE*, some general discrepancies were noticed and  modified before the main event-matching task as below :
+```{r eventMatch1, cache=TRUE}
+# transform database event type factors to lower cases
+f<- tolower(levels(storm$EVTYPE))
+
+# thunderstorm wind
+f<- gsub("tstm","thunderstorm wind", f)
+# NOAA glossary(http://forecast.weather.gov/glossary.php?word=tstm), tstm=thunderstorm
+f<- gsub("thunderstorm","thunderstorm wind", f)
+f<- gsub("burst","thunderstorm wind", f)
+
+# from NWS Directive  10-1605 page 1 Summary of Revisions: "Landslide" was renamed to "Debris Flow"
+f<- gsub("landslide","debris flow", f)
+
+# hurricane/typhoon
+f<- gsub("^typhoon","hurricane/typhoon", f)
+f<- gsub("hurricane","hurricane/typhoon", f)
+
+# others/typos
+f<- gsub("wintery","winter", f)
+f<- gsub("wintry","winter", f)
+f<- gsub("avalance","avalanche", f)
+f<- gsub("fld","flood", f)
+```
+
+Main event-matching task using for-loop. Events that failed to match were grouped as "others" :
+```{r eventMatch2, cache=TRUE}
+fClean<- rep("others", times=length(f))
+for (i in 1:length(evtb)) {
+    fClean[grep(evtb[i], f)]<- evtb[i]
+}
+rm(i)
+```
+
+Further grouping for events that could be clearly matched:
+```{r eventMatch3, cache=TRUE}
+fClean[grepl("wild[ /]", f) & fClean=="others"]<- "wildfire"
+fClean[grepl("extreme cold", f) & fClean=="others"]<- "extreme cold/wind chill"
+fClean[grepl("surge", f) & fClean=="others"]<- "storm surge/tide"
+fClean[grepl("surf", f) & fClean=="others"]<- "high surf"
+
+#(inline codes) number of event typs in the "others" group
+unmatchedEV<- sum(fClean=="others")
+```
+
+**2.4 Exame unmatched event types**
+
+There were `r unmatchedEV` event types not successfully matched. They were generally ambiguous, and were examed with following codes:
+```{r eventOthers, cache=TRUE}
+unmatched<- which(storm$EVTYPE %in% levels(storm$EVTYPE)[fClean=="others"])
+
+# check unmatched event types that have less than 10/only one record throught out 62 years of data
+list(five.or.less= sum(table(droplevels(storm$EVTYPE[unmatched]))<6),
+     only.one= sum(table(droplevels(storm$EVTYPE[unmatched]))==1))
+
+# (inline codes) exame the unmatched events
+unmatchedCheck<- list(Count=length(unmatched),
+                      Count.Perc=length(unmatched)/nrow(storm), 
+                      Harm.Dmg.Perc=colSums(storm[unmatched, c("FATALITIES","INJURIES","adjPROPDMG.M","adjCROPDMG.M")], na.rm=T)/colSums(storm[,c("FATALITIES","INJURIES","adjPROPDMG.M","adjCROPDMG.M")], na.rm=T))
+
+```
+
+```{r eventOthersTBL, results='asis', cache=TRUE}
+tnum=tnum+1
+kable(data.frame(Variables=names(unmatchedCheck[[3]]), Perc=paste0(format(unmatchedCheck[[3]]*100, digit=1),"%")), col.names=c("Variables","Unmatched event %"), row.names=F)
+```
+
+**Table `r tnum`.** Percentage of harm and damage variables from unmatched events.
+
+\
+The unmatched events represented `r sprintf("%0.1f", unmatchedCheck[[2]]*100)`% (`r unmatchedCheck[[1]]` rows) of the dataset. Many had only 5 or less records, and almost half had only one record. They were accounted for little share of fatalities, injuries, property and crop damage. It was therefore decided that no further event-matching was needed. The unmatched events were grouped as "others".
+
+ 
+**2.5. Create "Clean" event type variable**
+```{r eventClean, cache=TRUE}
+storm$EV.Clean<- storm$EVTYPE
+levels(storm$EV.Clean)<- fClean
+
+#check against 48 standard event type table
+length(intersect(levels(storm$EV.Clean), evtb)) ; setdiff(levels(storm$EV.Clean), evtb)
+
+```
+The "Clean" event types were labeled with `r nlevels(storm$EV.Clean)` categories, 48 from the standard event and 1 from "others".
+
+\
+
+
+**3. Event Type over Years**
+
+According to the [NOAA website][3], only 3 event types(tornado, thunderstorm wind, and hail) were reported prior to 1993. This was examined with the codes below: 
+
+```{r eventTBL, results='asis'}
+main3EV<- c("tornado", "thunderstorm wind", "hail")
+tnum=tnum+1
+
+#(inline cods) number of "non-tornado/thunder"
+tb<-table(storm$EV.Clean %in% main3EV, storm$YEAR>1992)
+```
+
+|Event Type | Before 1993 | 1993 Onward |
+|:----------|-------------|-------------|
+|Main 3*    |`r tb[2]`    |`r tb[4]`    |
+|All Others |`r tb[1]`    |`r tb[3]`    |
+
+\* *Main 3 event types: tornado, thunderstorm, and hail*
+
+**Table `r tnum`** Number of events reported before and after 1993 by event types
+
+\
+
+```{r eventHist, fig.width=10}
+fnum=fnum+1
+ggplot(storm, aes(x=YEAR)) + 
+    geom_histogram(aes(fill = EV.Clean %in% main3EV)) + 
+    labs(title = "Number of Events Reported\nAll States, 1993-2011", x = "Year", y = "Number of Events Reported") + 
+    scale_fill_discrete(name="Event Type", breaks=c("TRUE", "FALSE"), labels=c("Main 3*","All Others")) + 
+    theme_classic() + 
+    scale_x_continuous(limits=c(1950,2011), breaks=c(seq(1951,2011,6))) + 
+    theme(title = element_text(size=14, face="bold"), axis.title=element_text(size=12, face="bold"), 
+          panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank()) + 
+    geom_vline(xintercept=1993, linetype="dotted", colour="red", size=1)
+```
+
+\* *Main 3 event types: tornado, thunderstorm, and hail*
+
+**Figure `r fnum`** Number of events reported over time
+
+\
+
+Indeed there were only the main 3 event types reported before 1993. Therefore, data from 1950 to 1992 were excluded from this analysis.
+
+\
+
+
+**4. Data Selection**
+
+Selected only data of year 1993-2011 and interested variables
+```{r 1993onData, cache=TRUE}
+storm1993on<- subset(storm, YEAR>1992, select=c("STATE","YEAR","EV.Clean","FATALITIES","INJURIES","adjPROPDMG.M","adjCROPDMG.M"))
+```
+
+
+###Data Processing Summary
+
+**Property and Crop Damage**
+
+- Recognized only valid magnitudes "H, K, M, B"(hundred, thousand, million, and billion respectively). Ignored records with invalid magnitudes.
+
+- Calculated damage dollar amount in million and adjusted by CPI
+
+**Event Type**
+
+- Regrouped event types, initially 985, into the standard 48 categories. 
+
+- Grouped ambiguous events as "others"
+
+**Years**
+
+- Used only data from 1993 to 2011 for this analysis due to the drastic change of event types reported.
+
+
+## Results
+
+### With Respect to Population Health
+
+The Question: Across the United States, which types of events are most harmful with respect to population health?
+
+```{r harmTBL, results='asis'}
+harm.byEV <- storm1993on %>%
+    select(EV.Clean, FATALITIES, INJURIES) %>%
+    group_by(EV.Clean) %>%
+    summarize(count=n(), fat=sum(FATALITIES), inj=sum(INJURIES)) %>% 
+    mutate(fat.perc=prop.table(fat), inj.perc=prop.table(inj)) %>%
+    arrange(desc(fat))
+
+harmTop5<- cbind(harm.byEV[c(1:5),c(1,3,5)], arrange(harm.byEV, desc(inj))[c(1:5),c(1,4,6)])
+countTop5<- arrange(harm.byEV, desc(count))[c(1:5),c(1:3)]
+
+tnum<- tnum+1
+kable(transform(harmTop5, fat.perc=paste0(format(fat.perc*100,digit=0),"%") ,inj.perc=paste0(format(inj.perc*100,digit=0),"%")), 
+           col.names=c("Top 5 Fatality Events","Fatalities","%", "Top 5 Injury Events","Injuries","%"), 
+           row.names=F)
+```
+
+**Table `r tnum`** Top 5 events that caused most fatalities and injuries
+
+\
+
+"Excessive heat" was high on both fatality and injury top 5 lists. Another heat related event "Heat" also showed up on the top 5 fatality list. "Tornado" caused most injuries. Three weather events were on both top 5 lists: excessive heat, tornado, and lightning.
+
+\
+
+```{r harmScatter}
+harmTop5.F<- as.character(harmTop5[,1])
+harm.byEVplot<- transform(harm.byEV, Event.Type=EV.Clean)[,c(2,3,7)]
+levels(harm.byEVplot$Event.Type)[which(!levels(harm.byEVplot$Event.Type) %in% harmTop5.F)]<- "all other events"
+
+fnum<- fnum+1
+#the legend of this chart needs some work
+ggplot(harm.byEVplot, aes(x=count, y=fat, group= Event.Type)) + 
+    geom_point(aes(color= Event.Type, size= Event.Type, alpha=Event.Type)) + 
+    scale_color_manual(values=c("black","red","deepskyblue","green4","purple","orange")) + 
+    scale_alpha_manual(values=c(0.5,1,1,1,1,1)) + 
+    scale_size_manual(values=c(5,8,8,8,8,8)) + 
+    #scale_fill_manual("", name="Event Type", breaks=c(harmTop5.F, "all other events"), labels=c(harmTop5.F, "all other events"))  + 
+    labs(title = "Weather Events Fatalities by Number of Occurences\nAll States, 1993-2011", x = "Number of Events Reported", y = "Fatalities") + 
+    #guides(fill=guide_legend(title="Event Type")) + 
+    scale_fill_discrete(name="Event Type", breaks=c(harmTop5.F, "all other events"), labels=c(harmTop5.F, "all other events"))  + 
+    theme_bw() + 
+    theme(title = element_text(size=14, face="bold"), axis.title=element_text(size=12, face="bold"), 
+          panel.grid.major.x = element_line(colour="gray90", size=0.3), panel.grid.major.y = element_line(colour="gray90", size=0.3), legend.position="right")
+```
+
+**Figure`r fnum`** Weather Events Fatalities by Number of Occurences
+
+\
+
+Among the top 5 fatality events, "flash flood" events have occured the most time. It was also observed that "`r countTop5[1,1]`", which ranked no.`r which(harm.byEV$EV.Clean=="thunderstorm wind")` in fatality and no.`r which(arrange(harm.byEV, desc(inj))$EV.Clean=="thunderstorm wind")` in injury, has had the highest occurences in all events.
+
+\
+
+
+### With Respect to Economic Consequences
+
+The Question: Across the United States, which types of events have the greatest economic consequences?
+
+```{r dmgTBL, results='asis'}
+dmg.byEV <- storm1993on %>%
+    select(EV.Clean, adjPROPDMG.M, adjCROPDMG.M) %>%
+    group_by(EV.Clean) %>%
+    summarize(count=n(), prop=sum(adjPROPDMG.M, na.rm=T)/10^3, crop=sum(adjCROPDMG.M, na.rm=T)/10^3) %>%  # damage dollors changed to "Billions"
+    mutate(prop.perc=prop.table(prop), crop.perc=prop.table(crop),
+           total=prop+crop, total.perc=prop.table(total)) %>%
+    arrange(desc(prop))
+
+dmgTop5<- cbind(dmg.byEV[c(1:5),c(1,3,5)], arrange(dmg.byEV, desc(crop))[c(1:5),c(1,4,6)], 
+                arrange(dmg.byEV, desc(total))[c(1:5),c(1,7,8)])
+dmgCountTop5<- arrange(dmg.byEV, desc(count))[c(1:5),c(1:4,7)]
+
+tnum<- tnum+1
+kable(transform(dmgTop5, prop.perc=paste0(format(prop.perc*100,digit=0),"%"), crop.perc=paste0(format(crop.perc*100,digit=0),"%"), total.perc=paste0(format(total.perc*100,digit=0),"%")), 
+           col.names=c("Top 5 Property Damage","$B","%", "Top 5 Crop Damage","$B","%", "Top 5 Property+Crop Damage","$B","%"), row.names=F)
+
+```
+
+**Table `r tnum`** Top 5 events that caused most proterty and crop damages (in $Billions)
+
+\
+
+```{r dmgBarhor, fig.width=10}
+dmgTop10EV<- as.character(arrange(dmg.byEV, desc(total))[c(1:10),]$EV.Clean)
+dmgRegroup<- dmg.byEV %>%
+    arrange(desc(total)) %>%
+    select(c(1,3,4)) %>%
+    gather(dmg.type, dmg.M, -EV.Clean)
+
+levels(dmgRegroup$EV.Clean)[which(!levels(dmgRegroup$EV.Clean) %in% dmgTop10EV)]<- "all other events"
+
+dmg.EV.order<- droplevels(rbind(arrange(dmg.byEV, desc(total))[c(1:10),c(1,7)], data.frame(EV.Clean="all other events", total=sum(dmgRegroup$dmg.M[dmgRegroup$EV.Clean=="all other events"]))))
+dmg.EV.order<- as.character(arrange(dmg.EV.order, desc(total))$EV.Clean)
+
+fnum=fnum+1
+ggplot(dmgRegroup, aes(x=EV.Clean, y=dmg.M, fill=dmg.type)) + 
+    geom_bar(stat = "identity", width=.7) + coord_flip() + 
+    labs(title = "Weather Events Property and Crop Damage\nAll States, 1993-2011", x = "Event Type (damage:  less  -->  more)", y = "Damage ($Billions)") + 
+    scale_fill_discrete(name="Damage Type", labels=c("Properties","Crops")) +
+    scale_x_discrete(limits=rev(dmg.EV.order)) + 
+    scale_y_continuous(limits=c(0,200), breaks=seq(0,200,25)) + 
+    theme_bw() + 
+    theme(title = element_text(size=14, face="bold"), axis.title=element_text(size=12, face="bold"), 
+          panel.grid.major.x = element_line(colour="gray50", size=0.3, linetype="dotted"), panel.grid.major.y = element_blank(),
+          legend.position=c(0.9,0.4))
+```
+
+**Figure `r fnum`** Weather Events Property and Crop Damages
+
+\
+
+"Flood" has caused the most property damage, followed by "hurricane/typhoon". "Drought" has caused the most crop damage, followed by "flood".
+
+It was surprising how flood has caused significantly more (about 70%) of property damage than hurricane/typhoon, considering the recent events such as Hurricane Sandy and Hurricane Katrina. A further investigation would be necessary to see if any recording errors have occurred, for example, incorrect event type or incorrect damage magnitude.
