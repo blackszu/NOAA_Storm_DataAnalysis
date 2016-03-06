@@ -2,6 +2,7 @@
 
 ### An Analysis of NOAA's Storm Events Database 
 
+**Author: S. Wu**
 
 ## Synopsis 
 

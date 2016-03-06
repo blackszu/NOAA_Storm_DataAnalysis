@@ -2,7 +2,7 @@
 
 ## An Analysis of NOAA's Storm Events Database
 
-### This is a course assignment for Reproducible Research, Data Science Specialization by Johns Hopkins University via Coursera.
+### This is a course assignment for Reproducible Research, Data Science Specialization by Johns Hopkins University via Coursera
 
 Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. 
 This report provides an analysis as to which weather events effect both aspects across the United States. 
